@@ -1,0 +1,505 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+import argparse
+import json
+import db.ucgdapi as ucgdapi
+import db.ucgddb as ucgddb
+import api.fabric as fabric
+import api.mosaic as mosaic
+import api.portal as portal
+import api.hpo as hpo
+import messaging.sns as ucgdsns
+import messaging.log as ucgdlog
+import ucgd.pipeline as ucgdpipeline
+import ontology.obo as obo 
+from pyfiglet import Figlet
+
+## base class.
+class Nicu:
+    def __init__(self, args):
+
+        self.ucgd_db = ucgddb.DatabaseUCGD(args)
+        self.wp_api = ucgdapi.PortalUCGD(args)
+        self.f_api  = fabric.fabricAPI(args)
+        self.m_api  = mosaic.mosaicAPI(args)
+        self.p_api  = portal.UCGDPortal(args)
+        self.h_api  = hpo.OBOApi()
+        self.sns    = ucgdsns.SNS(args)
+        self.obo    = obo.OBO(args) 
+        self.pipe   = ucgdpipeline.PipelineUCGD(args)
+        self.log    = ucgdlog.LogUCGD(args)
+
+## ---------------------------------------------- ##
+## Pipeline action calls
+## ---------------------------------------------- ##
+
+def make_ped_file(args, nicu):
+    """
+    Will create ped file from data collected from the UCGDDB.
+    """
+    try:
+        if args.project == None:
+            raise ValueError
+    except ValueError:
+        print('ERROR: [--project] option required for pipeline commands.')
+        sys.exit(1)
+
+    ## connect to ucgddb
+    nicu.ucgd_db.make_ped_file(args.project)
+
+## ---------------------------------------------- ##
+
+def create_sample_list(args, nicu):
+    """
+    Will create sample list file from data collected from UCGDDB.
+    """
+    try:
+        if args.project == None:
+            raise ValueError
+    except ValueError:
+        print('ERROR: [--project] option required for pipeline commands.')
+        sys.exit(1)
+
+    ## get samples from ucgddb
+    nicu.ucgd_db.get_ready_sample_list(args.project)
+
+## ---------------------------------------------- ##
+
+def prep_create(args, nicu):
+    """Will create a prep file for arup_prep.pl script to use.
+    command: NICUWatch -pf -p [PROJECT]
+    """
+    try:
+        if args.project == None:
+            raise ValueError
+    except ValueError:
+        print('ERROR: [--project] option required for pipeline commands.')
+        sys.exit(1)
+
+    ## connect to ucgddb to make prep file.
+    nicu.ucgd_db.make_prep_file(args.project)
+
+## ---------------------------------------------- ##
+## API calls
+## ---------------------------------------------- ##
+
+def fabric_talk(args, nicu):
+    """
+    Interacts with fabric api at different endpoints.
+    """
+    ## connect to fabric api
+    fabric_proj = nicu.f_api.get_all_projects()
+
+    ## build dict of all current f_projects.
+    fabric_record = {} 
+    for id, f_project in fabric_proj.items():
+            fabric_record[f_project] = id
+
+    if args.fabric_action == 'list':
+        for f_project, id in fabric_record.items():
+            message = 'Fabric id: {} -- Fabric project: {}'
+            print(message.format(id, f_project))
+
+    if args.fabric_action == 'delete':
+        try:
+            if args.fabric_project_id == None:
+                raise ValueError
+        except ValueError:
+            print('Fabric interaction requires fabric_project_id. [--fabric_project_id].')
+            sys.exit(1)
+
+        for id, f_project in fabric_proj.items():
+            if f_project == args.project:
+                nicu.f_api.delete_fabric_project(id)
+                nicu.log.info('Fabric project {} deleted.'.format(f_project))
+
+    if args.fabric_action == 'upload_genome':
+        try:
+            if args.project == None or args.sample == None or args.vcf_file == None or args.checksum_file == None:
+                raise ValueError
+        except ValueError:
+            print('[--project], [--sample], [--vcf_file], [--checksum_file] options required')
+            sys.exit(1)
+
+        ## get all sample columns for this project and sample.
+        sample_dbinfo = nicu.ucgd_db.get_individual_sample(args.project, args.sample)
+
+        if args.project in fabric_record.keys():
+            nicu.f_api.add_genome(fabric_record[args.project], sample_dbinfo[16], args.vcf_file, args.sample, args.project, args.checksum_file, nicu)
+
+    if args.fabric_action == 'create_case':
+        try:
+            if args.project == None:
+                raise ValueError
+        except ValueError:
+            print('Fabric interaction requires f_project. [--f_project].')
+            sys.exit(1)
+
+        ## build fabric dict structure
+        fabric_meta = nicu.ucgd_db.get_fabric_sample_data(args.project)
+
+        ## get fabric id, hpo terms from ucgddb and kindred id.
+        fabric_project_id = nicu.ucgd_db.get_fabric_project_id(args.project)
+        project_hpo = nicu.ucgd_db.get_project_hpo_terms(args.project)
+        kindred_id = nicu.ucgd_db.get_kindred_id(args.project)
+        get_family_type = nicu.ucgd_db.get_family_type(args.project)
+        family_type = get_family_type.capitalize()
+
+        allowed_family_types = {"Duo", "Trio", "Quad", "Quintet"}
+        if family_type not in allowed_family_types:
+            nicu.sns.fabric_issue('Could not launch fabric case with "{}" family type.'.format(family_type))
+            exit(1)
+        
+        ## map collected values to hpo ids and json-a-fy it.
+        report = nicu.obo.term_to_id(project_hpo, fabric_project_id, kindred_id, family_type, nicu)
+
+        fabric_meta.update(report)
+        fabric_json = json.dumps(fabric_meta)
+
+        ## push to fabric via api.
+        nicu.f_api.create_case(fabric_json, args, nicu)
+
+## ---------------------------------------------- ##
+    
+def mosaic_talk(args, nicu):
+    """
+    Interacts with mosaic api at different endpoints.
+    """
+    response_json = nicu.m_api.get_all_projects(args, nicu)
+
+    if args.mosaic_action == 'list':
+        for key, value in response_json.items():
+            if key == 'data':
+                for r in value:
+                    output = 'Mosaic project name {}, project id {}, description: {}'
+                    print(output.format(r['name'], r['id'], r['description']))
+
+    if args.mosaic_action == 'upload_slivar':
+        try:
+            if args.mosaic_project_id == None or args.slivar_file == None:
+                raise ValueError
+        except ValueError:
+            print('ERROR: [--mosaic_project_id] and [--slivar_file] option required for request.')
+            sys.exit(1)
+        nicu.m_api.post_slivar_file(nicu, args)
+
+    if args.mosaic_action == 'upload_pedigree':
+        try:
+            if args.mosaic_project_id == None or args.pedigree_file == None:
+                raise ValueError
+        except ValueError:
+            print('ERROR: [--mosaic_project_id] and [--pedigree_file] option required for request.')
+            sys.exit(1)
+        nicu.m_api.post_pedigree(nicu, args)
+
+## ---------------------------------------------- ##
+
+def portal_check(args, nicu):
+    """
+    Checks to confirm the UCGD portal api is up, sends sns on failure.
+    """
+    nicu.p_api.portal_health(nicu) 
+
+## ---------------------------------------------- ##
+## NICUWatch actions.
+## ---------------------------------------------- ##
+
+def new_manifest_build(args, nicu):
+    """
+    Will check for manifest file and update ucgddb
+    build processing space and create projects in
+    fabric and mosaic.
+
+    Automation outline: Manifest to UCGDDB sync.
+    """
+    ## Step message.
+    nicu.log.info('Checking for new UCGD NeoSeq manifests...')
+
+    ## check for any new xlsx files on ubox.
+    xlsx_file = nicu.pipe.get_ubox_projects(nicu)
+
+    if xlsx_file:
+        ## keep order.
+        nicu.sns.neoseq_general('Manifest found, validating and adding to UCGDDB.')
+        nicu.ucgd_db.update_ucgddb(xlsx_file, nicu, args)
+        nicu.ucgd_db.build_processing_space(nicu)
+        project_name = nicu.ucgd_db.get_project_name()
+
+        ## run reset-acl to guarantee early access.
+        nicu.pipe.reset_acl(nicu)
+
+        ## API calls to make fabric, mosaic and ubox projects.
+        nicu.f_api.create_project(project_name, nicu)
+        nicu.m_api.create_project(project_name, nicu)
+        nicu.pipe.build_ubox_project(project_name, xlsx_file, nicu)
+       
+        ## send message out to alert new project found.
+        family_type = nicu.ucgd_db.get_family_type(project_name)
+        new_project_message = '{}({})'.format(project_name, family_type)
+        nicu.sns.new_project_discovered(new_project_message)
+        nicu.sns.time_tracker(project_name, 'Manifest validation and project setup complete.')
+        nicu.log.info('Manifest Valid! UCGD, Fabric, Ubox and Mosaic spaces built for project: {}'.format(project_name))
+    else:
+        nicu.log.info('No new manifests discovered.')
+
+## ---------------------------------------------- ##
+
+def drop_check(args, nicu):
+    """Will collect accession number from UCGDDB
+    and ARUP drop location and issue warning if novel
+    accession found in drop location.
+
+    Automation outline: Data found in webportal not in UCGDDB
+    """
+    ## if testing direct run.
+    if args.test:
+        drop_location = nicu.ucgd_db.get_nicu_drop()
+        fastq_files = [
+                '20329101160_S1_R1_001.fastq.gz',
+                '20329101160_S1_R2_001.fastq.gz', 
+                '20329120647_S2_R1_001.fastq.gz',
+                '20329120647_S2_R2_001.fastq.gz',
+                '20329120769_S3_R1_001.fastq.gz',
+                '20329120769_S3_R2_001.fastq.gz'
+        ]
+        for fastq in fastq_files:
+            drop_file = '{}/{}'.format(drop_location, fastq) 
+            project_file = '{}T101-101-NEO-Cyberdyne/Project_Setup/{}'.format(args.irb_path, fastq)
+            os.rename(drop_file, project_file)
+            
+            ## update to queue
+            file_accession = fastq.split('_')[0]
+            nicu.ucgd_db.update_sample_status(file_accession, 'queue')
+        exit(0)            
+        
+    ## Non test continuation.
+    nicu.log.info('Checking ARUP data drop location...')
+
+    ## connect to webportal to get all ARUP accession ids and make a set.
+    src_ids = nicu.wp_api.get_current_accession_ids()
+    current_src = set(src_ids)
+
+    ## 1. check for rouge accession numbers not entered into ucgddb and SNS
+    ## 2. check md5 and if valid, move data into processing and update ucgddb 
+    rouge_data = []
+    send_message = False        
+    for root, dirs, files in os.walk(args.nicu_drop):
+        for accession in dirs:
+            if not (accession in current_src):
+                # 1.
+                rouge_data.append(accession)
+                continue
+            else:
+                # 2.
+                project = nicu.ucgd_db.get_project_from_accession(accession, nicu)
+                if not project:
+                    nicu.sns.project_issue('Accession {} has no noted projects in UCGDDB'.format(accession))
+                    nicu.log.info('Accession {} has no noted projects in UCGDDB'.format(accession))
+                    continue
+                md5_valid_dict, md5_files = nicu.pipe.md5_check(accession, project, nicu)
+                for file, code in md5_valid_dict.items():
+                    if code != 0:
+                        nicu.sns.checksum_issue(accession, md5_files.pop())
+                        nicu.log.info('Checksum failed for accession {}'.format(accession))
+                        continue
+                    ## if md5 is valide move data, then...
+                    nicu.wp_api.move_drop_data(accession, project, nicu)
+                    ## update status of sample
+                    nicu.ucgd_db.update_sample_status(accession, 'queue')
+                    ## send sns that fastq are available.
+                    send_message = True
+
+    if send_message == True:
+        nicu.sns.data_alert(project, 'FASTQ')
+        nicu.sns.time_tracker(project, 'Fastq validation completed.')
+
+    if rouge_data and len(rouge_data) > 1:
+        complete = ', '.join(rouge_data)
+        nicu.sns.rouge_data(complete)
+        nicu.log.info('Rouge data found. SNS message sent.')
+    elif rouge_data:
+        nicu.sns.rouge_data(rouge_data.pop())
+
+## ---------------------------------------------- ##
+
+def process_check(args, nicu):
+    """
+    Automation outline: Processing status check
+    """
+    ## Step message.
+    nicu.log.info('Checking current processing status of all projects...')
+
+    ## check the current status of the project.
+    is_message, sample = nicu.ucgd_db.check_project_status()
+
+    if is_message:
+        nicu.log.info('Progress check completed. Long wait sample, sns sent.')
+        nicu.sns.late_sample(sample)
+    else:
+        nicu.log.info('Process check completed.')
+
+## ---------------------------------------------- ##
+
+def launch_pipeline(args, nicu):
+    """
+    Automation outline: Pipeline run
+    """
+    ## Step message.
+    nicu.log.info('Checking if projects are ready for processing...')
+
+    ## check the current status of the project.
+    ready_projects = nicu.ucgd_db.check_ready_projects()
+
+    if ready_projects:
+        ## only want to process one per NICUWatch call at a time.
+        project = ready_projects.pop()
+
+        ## get the projects mosaic id
+        mosaic_id = nicu.ucgd_db.get_mosaic_project_id(project)
+
+        run = nicu.pipe.launch_projects(project, args, nicu, mosaic_id)
+        result = run[0]
+        processing_space = run[1]
+
+        if result.returncode != 0:
+            nicu.ucgd_db.update_project_status(project, 'hold')
+            nicu.sns.project_issue('While processing project {} an issue occured.'.format(project))
+            nicu.log.error('While processing project {} a error occured {}'.format(project, processing_space))
+        else:
+            nicu.ucgd_db.update_project_status(project, 'var_complete')
+            nicu.sns.processing_completed(project, processing_space)
+            nicu.sns.time_tracker(project, 'NeoSeq pipeline processing')
+            nicu.log.info('Process of project {} complete.'.format(project))
+    else:
+        nicu.log.info('No NeoSeq projects ready to process.')
+
+## ---------------------------------------------- ##
+## MAIN
+## ---------------------------------------------- ##
+
+if __name__ == '__main__':
+
+    ## check if accepted user.
+    try:
+        if os.environ['USER'] != 'ucgd-pepipeline':
+            raise PermissionError
+    except PermissionError:
+        print('Must be ucgd-pepipeline user to use this script..')
+        sys.exit(1)
+
+    ## db config file default.
+    db_config = os.environ['HOME'] + '/.config/ucgd/ucgd.config'
+    try:
+        if not os.path.exists(db_config):
+            raise FileExistsError
+    except FileExistsError:
+        print('UCGD configuration file not found.', db_config)
+        sys.exit(1)
+
+    ## path to rclone config file
+    rclone_config = os.environ['HOME'] + '/.config/rclone/rclone.conf'
+    try:
+        if not os.path.exists(rclone_config):
+            raise FileExistsError
+    except FileExistsError:
+        print('rclone configuration file not found.', rclone_config)
+        sys.exit(1)
+
+    ## NeoSeq ACL path.
+    acl_path = os.environ['ACL'] + '/'
+
+    ## NeoSeq IRB path.
+    irb_path = os.environ['IRBS'] + '/IRB_00125940/'
+
+    ## default nicu drop space.
+    ## put hardcoded path in object.
+    nicu_drop = irb_path + 'Staging/'
+
+    ## log file locaton.
+    log_file = os.environ['WORK'] + '/neoseq/nicuwatch.log'
+    mtp_path = _file = os.environ['WORK'] + '/neoseq/'
+
+    ## cool name= ;)
+    f = Figlet(font='slant')
+    script_desc = f.renderText(' NICUWatch ') 
+    
+    ## define the parser values.
+    parser = argparse.ArgumentParser(add_help=False, formatter_class=argparse.RawDescriptionHelpFormatter, description=script_desc)
+    parser.add_argument('--version', action='version', version='%(prog)s 1.1.39')
+    parser.add_argument('--config', '-c', help="UCGD master config file.", default=db_config)
+    parser.add_argument('--rclone_config', '-rc', help="rclone config file.", default=rclone_config)
+    parser.add_argument('--log_file', '-l', help="UCGD NeoSeq path to log file.", default=log_file)
+    parser.add_argument('--nicu_drop', '-nd', help="Current UCGD NeoSeq drop location.", default=nicu_drop)
+    parser.add_argument('--irb_path', '-irb', help="Current UCGD NeoSeq processing location.", default=irb_path)
+    parser.add_argument('--acl_path', '-acl', help="Current UCGD NeoSeq ACL location.", default=acl_path)
+    parser.add_argument('--message_tracker_path', '-mtp', help="Write path for SNS message tracker.", default=mtp_path)
+    parser.add_argument('--project', '-p', help="NeoSeq project to use.")
+    parser.add_argument('--project_path', '-pp', help="Path to a given NeoSeq project.")
+    parser.add_argument('--sample', '-sm', help="UCGDDB sample_id")
+    parser.add_argument('--accession', '-a', help="NeoSeq ARUP accession number.")
+    parser.add_argument('--hpo_file', help='human phenotype ontology obo file used for fabric report upload')
+    parser.add_argument('--test', help='Will run the NeoSeq pipeline in test/dev mode.', action='store_true')
+
+    subparsers = parser.add_subparsers(help='sub-command usage')
+
+    ## NeoSeq automation options
+    manifest_parser = subparsers.add_parser('manifest_check', parents=[parser], help="Will check for new nicu manifest files and: update ucgddb, build project out.")
+    manifest_parser.set_defaults(func=new_manifest_build)
+   
+    drop_parser = subparsers.add_parser('drop_check', parents=[parser], help="Will check UCGD NeoSeq drop location for accession numbers not yet entered into UCGDD.")
+    drop_parser.set_defaults(func=drop_check)
+
+    process_parser = subparsers.add_parser('process_check', parents=[parser], help="Will check UCGD NeoSeq project for current processing status")
+    process_parser.set_defaults(func=process_check)
+
+    pipeline_parser = subparsers.add_parser('run_pipeline', parents=[parser], help="Will check UCGDDB for 'ready' projects and launch the UCGD-Pipeline.")
+    pipeline_parser.add_argument('--pipeline_step', '-ps', help="Which pipeline steps to run. [VAR|SV|POST|MOSAIC|ALL]", default='ALL')
+    pipeline_parser.set_defaults(func=launch_pipeline)
+
+    ## interact with fabric
+    fabric_parser = subparsers.add_parser('fabric', parents=[parser], help="Interact with the fabric API.")
+    fabric_parser.add_argument('--fabric_action', '-fa', help="Allows tasks to be ran on a returned collection of current fabric projects [list|delete|upload_genome|create_case].", default='list')
+    fabric_parser.add_argument('--vcf_file', '-vf', help="Parsed individual vcf file to upload to fabric.")
+    fabric_parser.add_argument('--checksum_file', '-cf', help="Parsed MD5 checksum file using fabric requirements.")
+    fabric_parser.add_argument('--fabric_project_id', '-fpi', help="Fabric project id.")
+    fabric_parser.set_defaults(func=fabric_talk)
+
+    ## interact with mosaic
+    mosaic_parser = subparsers.add_parser('mosaic', parents=[parser], help="Interact with the Mosaic API.")
+    mosaic_parser.add_argument('--mosaic_project_id', '-mpi', help="Mosaic project id.")
+    mosaic_parser.add_argument('--mosaic_action', '-ma', help="Allows tasks to be ran on a returned collection of current fabric projects [list|upload_slivar|upload_pedigree].", default='list')
+    mosaic_parser.add_argument('--slivar_file', '-sf', help="Slivar VCF to upload to Mosaic.")
+    mosaic_parser.add_argument('--pedigree_file', '-ped_file', help="Pedigree file to upload to mosaic project.")
+    mosaic_parser.set_defaults(func=mosaic_talk)
+
+    ## ucgd portal 
+    portal_parser = subparsers.add_parser('portal_check', parents=[parser], help="Will check that the UCGD portal is up and running.")
+    portal_parser.set_defaults(func=portal_check)
+
+    ## Pipeline specific commands.
+    cpf_parser = subparsers.add_parser('create_prep_file', parents=[parser], help="Will generate sample_id to ARUP accession list file.")
+    cpf_parser.set_defaults(func=prep_create)
+
+    sl_parser = subparsers.add_parser('samples_list', parents=[parser], help="Create a sample list of all individuals within a project, with 'processing' sample_status.")
+    sl_parser.set_defaults(func=create_sample_list)
+    
+    mpf_parser = subparsers.add_parser('make_ped_file', parents=[parser], help="Generate ped file from given NeoSeq project.")
+    mpf_parser.set_defaults(func=make_ped_file)
+
+    ## build args and run function.
+    args = parser.parse_args()
+    try:
+        if args.test:
+            args.irb_path = '/scratch/ucgd/lustre/UCGD_Datahub/IRBs/IRB_00000000/'
+            args.nicu_drop = '/scratch/ucgd/lustre/UCGD_Datahub/IRBs/IRB_00000000/Staging/'
+        nicu = Nicu(args)
+        ## Write commandline to log file.
+        called_command = ' '.join(sys.argv)
+        nicu.log.info(' ~~ NICUWatch called command: "{}" ~~'.format(called_command))
+        func = args.func(args, nicu)
+    except Exception as e: 
+        parser.print_help()
+        if args.test:
+            print(e)

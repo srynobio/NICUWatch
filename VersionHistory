@@ -1,0 +1,146 @@
+## Start version 1.0.0
+* Initial
+## End version 1.0.0
+## Start version 1.1.1
+* updated workflows to include nextflow 'link' from 'move' to fix the timestamp issue.
+* updated to use Fabric NICU production version
+* general code updates and clean-ups.
+## End version 1.1.1
+## Start version 1.1.2
+* workflow cleanups and minor mods
+* added SNS per pipeline processing step.
+* added SNS at fastq ready.
+## End version 1.1.2
+## Start version 1.1.3
+* hotfix to add irb info to project table.
+## End version 1.1.3
+## Start version 1.1.4
+* added additional SNS alerts
+* updated ucgd.vcf.postprocess nextflow 
+* add manta into sv nextflow
+## End version 1.1.4
+## Start version 1.1.5
+* hotfix to skip fastq links found
+## End version 1.1.5
+## Start version 1.1.6
+* hotfix to correct fastq links found
+* ucgddb update
+## End version 1.1.6
+## Start version 1.1.7
+* hotfix syntax error
+## End version 1.1.7
+## Start version 1.1.8
+* hotfix db interactions
+* hotfix manta correct file name fix
+* hotfix vcf post-process nextflow channel fix
+## End version 1.1.8
+## Start version 1.1.9
+* updated excel upload code to use hpo_terms instead of phenotype description
+## End version 1.1.9
+## Start version 1.1.10
+* updated sv nextflow manta section to single run whole family.
+## End version 1.1.10
+## Start version 1.1.11
+* added automated portal check to check that the ucgd portal api is working.
+## End version 1.1.11
+## Start version 1.1.12
+* hotfix to add cram file path
+* hotfix for mosaic updates not known about
+## End version 1.1.12
+## Start version 1.1.13
+* hotfixes to clean, mosaic, sv nextflows and falures on file locks.
+## End version 1.1.13
+## Start version 1.1.14
+* hotfixes adds reset-acl call
+## End version 1.1.14
+## Start version 1.1.15
+* hotfix to increase the varchr for phenotype in ucgddb
+## End version 1.1.15
+## Start version 1.1.16
+* hotfix to mosaic workflow to move files correctly.
+## End version 1.1.16
+## Start version 1.1.17
+* added support to launch fabric trio analysis.
+## End version 1.1.17
+## Start version 1.1.18
+* updated obo script
+* added fabric case launch
+* changed run order to POST -> SV
+## End version 1.1.18
+## Start version 1.1.19
+* sns feature and fabric case lauch updates
+## End version 1.1.19
+## Start version 1.1.20
+* updates to clean up sns, fabric api, and general code improvement
+## End version 1.1.20
+## Start version 1.1.21
+* update master config to include neoseq qos
+## End version 1.1.21
+## Start version 1.1.22
+* added hpo api support to create write file of project terms.
+* added family_type to fabric code and database.
+* added slivar processing to pipeline and upload to mosaic.
+* updated neoseq master file to only support GRCh38
+## End version 1.1.22
+## Start version 1.1.23
+* added capitalize to family_type
+## End version 1.1.23
+## Start version 1.1.24
+* family_type db update correction
+## End version 1.1.24
+## Start version 1.1.25
+* hotfix to mosaic and pipeline workflows.
+## End version 1.1.25
+## Start version 1.1.26
+* added test suite
+## End version 1.1.26
+## Start version 1.1.27
+* updated master config for chpc tmp path and shared node memory from 10 to 20G.
+## End version 1.1.27
+## Start version 1.1.28
+* updated to work with the CHPC node TMPDIR structure.
+## End version 1.1.28
+## Start version 1.1.29
+* update pedigree check to be more permissive
+* updated slivar workflow to SOP version change bfba3c8
+* updated to work with the CHPC node TMPDIR structure.
+# End version 1.1.29
+# Start version 1.1.30
+* update fabric case upload api to work correctly 
+* updated crontab file to pause all NeoSeq running.
+* updated mosaic to include better error message reporting.
+# End version 1.1.30
+## Start version 1.1.31
+* updated a pseudo-bug of username id for jimmy genome.
+* fixed bugs in mosaic, fabirc code.
+# End version 1.1.31
+# Start version 1.1.32
+* updated mosaic api to add default attributes.
+# End version 1.1.32
+# Start version 1.1.33
+* update to ucgddb code for fabric case launch bug fix.
+# End version 1.1.33
+# Start version 1.1.34
+* update to add auto hpo gene list creation.
+* updates to mosaic, fabric api classes to include payload reporting.
+# End version 1.1.34
+# Start version 1.1.35
+* update to better handle non-discovered hpo terms.
+* cleaned up API result messages
+* added sliver trio.js
+# End version 1.1.35
+# Start version 1.1.36
+* updated https check for hpo api
+* remove  --interval !{params.regionBeds} from apply steps of VQSR.
+# End version 1.1.36
+# Start version 1.1.37
+* added ownership of NeoSeq projects to Dawn and Sabrina
+# End version 1.1.37
+# Start version 1.1.38
+* added additional reset-acl at project build
+* updated vcf_preprocessing and slivar step based on updated SOP.
+# End version 1.1.38
+# Start version 1.1.39
+* updated all docker containers.
+* updated vcf.postprocess workflow based on accidental prod commit.
+# End version 1.1.39
